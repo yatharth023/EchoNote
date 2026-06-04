@@ -1,4 +1,4 @@
-# Xcode
+# Xcode user data
 *.xcodeproj/project.xcworkspace/xcuserdata/
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
@@ -6,12 +6,20 @@ xcuserdata/
 *.xccheckout
 *.xcscmblueprint
 
-# Build
+# Xcode shared data (SPM resolved versions — regenerated on build)
+*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/configuration/
+*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+
+# Build artifacts
 build/
 DerivedData/
 *.ipa
 *.dSYM.zip
 *.dSYM
+*.o
+*.hmap
+*.app
+*.xcarchive
 
 # Swift Package Manager
 .build/
@@ -22,15 +30,19 @@ Packages/
 Pods/
 
 # WhisperKit bundled model (~500MB CoreML files)
+# Download with: huggingface-cli download argmaxinc/whisperkit-coreml --include "openai_whisper-small.en/*" --local-dir ./openai_whisper-small.en
 openai_whisper-small.en/
 BundledModels/
 
 # OS files
 .DS_Store
+**/.DS_Store
 *.swp
 *~
 .Spotlight-V100
 .Trashes
+._*
+Thumbs.db
 
 # IDE
 *.pbxuser
@@ -44,3 +56,22 @@ BundledModels/
 
 # Claude Code
 .claude/
+
+# Crashlogs
+*.crash
+
+# Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# Instruments
+*.trace
+
+# Provisioning profiles (should not be in repo)
+*.mobileprovision
+*.provisionprofile
+
+# Secrets / environment
+.env
+.env.*
+*.xcconfig.local

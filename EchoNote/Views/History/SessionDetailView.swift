@@ -13,24 +13,44 @@ struct SessionDetailView: View {
     @Environment(\.modelContext) private var modelContext
     let session: EchoSession
 
-    @State private var searchText: String = ""
+    @State private var searchManager = TranscriptSearchManager()
     @State private var isEditingTitle: Bool = false
     @State private var editedTitle: String = ""
+    @State private var scrollTarget: Int?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                sessionInfoCard
-
-                Divider()
-
-                transcriptSection
+        VStack(spacing: 0) {
+            TranscriptSearchBar(searchManager: searchManager) {
+                scrollTarget = searchManager.currentMatch?.chunkIndex
             }
-            .padding()
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        sessionInfoCard
+
+                        Divider()
+
+                        transcriptSection
+                    }
+                    .padding()
+                }
+                .onChange(of: scrollTarget) { _, target in
+                    guard let target else { return }
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        proxy.scrollTo("chunk-\(target)", anchor: .center)
+                    }
+                    scrollTarget = nil
+                }
+                .onChange(of: searchManager.currentMatchIndex) { _, _ in
+                    scrollTarget = searchManager.currentMatch?.chunkIndex
+                }
+            }
         }
         .navigationTitle("Session Detail")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $searchText, prompt: "Search in transcript...")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -47,6 +67,10 @@ struct SessionDetailView: View {
             Button("Save") {
                 saveTitle()
             }
+        }
+        .onAppear {
+            let sortedChunks = session.chunks.sorted { $0.timestamp < $1.timestamp }
+            searchManager.setContent(sortedChunks.map(\.rawText))
         }
     }
 
@@ -97,7 +121,7 @@ struct SessionDetailView: View {
 
     private var transcriptContent: some View {
         VStack(alignment: .leading, spacing: 16) {
-            ForEach(filteredChunks) { chunk in
+            ForEach(Array(sortedChunks.enumerated()), id: \.element.id) { index, chunk in
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Image(systemName: "clock")
@@ -108,30 +132,21 @@ struct SessionDetailView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    Text(chunk.rawText)
+                    Text(searchManager.highlightedText(for: chunk.rawText, chunkIndex: index))
                         .font(.body)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
-                    if searchText.isEmpty {
-                        Divider()
-                    }
+                    Divider()
                 }
                 .padding(.vertical, 4)
+                .id("chunk-\(index)")
             }
         }
     }
 
-    private var filteredChunks: [TranscriptionChunk] {
-        let sortedChunks = session.chunks.sorted { $0.timestamp < $1.timestamp }
-
-        if searchText.isEmpty {
-            return sortedChunks
-        } else {
-            return sortedChunks.filter { chunk in
-                chunk.rawText.localizedCaseInsensitiveContains(searchText)
-            }
-        }
+    private var sortedChunks: [TranscriptionChunk] {
+        session.chunks.sorted { $0.timestamp < $1.timestamp }
     }
 
     private func saveTitle() {
