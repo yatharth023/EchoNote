@@ -10,7 +10,7 @@ import SwiftData
 
 @Model
 final class EchoSession {
-    @Attribute(.unique) var id: UUID
+    var id: UUID
     var createdAt: Date
     var title: String
     var durationSeconds: Double

@@ -11,7 +11,7 @@ import SwiftData
 struct LiveTranscriptView: View {
 
     @Environment(\.modelContext) private var modelContext
-    @State private var viewModel = LiveTranscriptViewModel()
+    @Bindable var viewModel: LiveTranscriptViewModel
     @State private var scrollViewID = UUID()
 
     private let bottomAnchorID = "bottom-anchor"
@@ -47,6 +47,12 @@ struct LiveTranscriptView: View {
             }
             .onAppear {
                 viewModel.setModelContext(modelContext)
+            }
+            .task {
+                let hasCompleted = UserDefaults.standard.bool(forKey: "echoNote.hasCompletedOnboarding")
+                if hasCompleted && (viewModel.modelState == .notLoaded || viewModel.modelState.isError) {
+                    await viewModel.loadWhisperModel()
+                }
             }
             .onChange(of: viewModel.selectedHighlightMode) { _, _ in
                 Task {
@@ -99,21 +105,45 @@ struct LiveTranscriptView: View {
         VStack(spacing: 24) {
             if viewModel.isRecording {
                 audioWaveformVisualizer
+            } else if viewModel.modelState == .downloading || viewModel.modelState == .loading {
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .scaleEffect(1.2)
+                }
+            } else if case .error = viewModel.modelState {
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 48))
+                        .foregroundStyle(.red)
+                    Button("Retry") {
+                        Task { await viewModel.loadWhisperModel() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
             } else {
                 Image(systemName: "waveform")
                     .font(.system(size: 64))
                     .foregroundStyle(.secondary)
             }
 
-            Text(viewModel.isRecording
-                ? "Listening..."
-                : "Tap the microphone to start recording")
+            Text(statusText)
                 .font(.headline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
         }
         .frame(maxWidth: .infinity, minHeight: 400, maxHeight: .infinity)
         .padding()
+    }
+
+    private var statusText: String {
+        switch viewModel.modelState {
+        case .notLoaded, .downloading, .loading:
+            return "Preparing speech engine..."
+        case .ready:
+            return viewModel.isRecording ? "Listening..." : "Tap the microphone to start recording"
+        case .error(let msg):
+            return "Error: \(msg)"
+        }
     }
 
     private var audioWaveformVisualizer: some View {
@@ -170,10 +200,15 @@ struct LiveTranscriptView: View {
                 }
             }
         } label: {
-            Image(systemName: viewModel.isRecording ? "stop.circle.fill" : "mic.circle.fill")
-                .font(.title)
-                .foregroundStyle(viewModel.isRecording ? .red : .blue)
+            if viewModel.modelState == .downloading || viewModel.modelState == .loading {
+                ProgressView()
+            } else {
+                Image(systemName: viewModel.isRecording ? "stop.circle.fill" : "mic.circle.fill")
+                    .font(.title)
+                    .foregroundStyle(viewModel.isRecording ? .red : .blue)
+            }
         }
+        .disabled(viewModel.modelState != .ready && !viewModel.isRecording)
         .accessibilityLabel(viewModel.isRecording ? "Stop Recording" : "Start Recording")
     }
 
@@ -205,5 +240,5 @@ struct LiveTranscriptView: View {
 }
 
 #Preview {
-    LiveTranscriptView()
+    LiveTranscriptView(viewModel: LiveTranscriptViewModel())
 }

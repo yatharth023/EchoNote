@@ -10,6 +10,7 @@ import SwiftUI
 import AVFoundation
 import SwiftData
 import CoreSpotlight
+import WhisperKit
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -18,53 +19,69 @@ import UIKit
 @Observable
 final class LiveTranscriptViewModel {
 
+    // MARK: - Published State
+
     var transcriptText: AttributedString = AttributedString("")
     var isRecording: Bool = false
     var isAutoScrollEnabled: Bool = true
     var showSnapToLiveButton: Bool = false
     var errorMessage: String?
+    var modelState: ModelLoadingState = .notLoaded
 
-    // FEATURE 1: Advanced Linguistic Highlight Filters
+    // Feature 1: Linguistic Highlight Filters
     var selectedHighlightMode: HighlightMode = .all
 
-    // FEATURE 2: Audio Level Visualizer
+    // Feature 2: Audio Level Visualizer
     var currentAudioLevel: Float = 0.0
 
-    private let audioEngineManager = AudioEngineManager()
-    private let speechService = SpeechTranscriptionService()
+    // The ID of the currently loaded model
+    var activeModelId: String?
+
+    // Transcript display
+    var confirmedTranscriptText: String = ""
+    var unconfirmedTranscriptText: String = ""
+
+    enum ModelLoadingState: Equatable {
+        case notLoaded
+        case downloading
+        case loading
+        case ready
+        case error(String)
+
+        var isError: Bool {
+            if case .error = self { return true }
+            return false
+        }
+    }
+
+    // MARK: - Private Services
+
     private let textProcessor = TextProcessingService()
 
-    // Haptic Feedback Generators
     private let mediumHaptic = UIImpactFeedbackGenerator(style: .medium)
     private let lightHaptic = UIImpactFeedbackGenerator(style: .light)
     private let errorHaptic = UINotificationFeedbackGenerator()
 
-    private var audioStreamTask: Task<Void, Never>?
-    private var transcriptionStreamTask: Task<Void, Never>?
-    private var audioLevelTask: Task<Void, Never>?
+    // MARK: - WhisperKit
 
-    // Mark as nonisolated(unsafe) since it's just a NotificationCenter token
-    // and NotificationCenter operations are thread-safe
+    private var whisperKit: WhisperKit?
+    private var streamTranscriber: AudioStreamTranscriber?
+    private var transcriptionTask: Task<Void, Never>?
+
+    // MARK: - State
+
     nonisolated(unsafe) private var interruptionObserver: NSObjectProtocol?
 
-    // WORD-ARRAY TOKEN DIFF ARCHITECTURE
     private var rawTranscriptLedger: String = ""
-    private var lastProcessedWords: [String] = []
-
-    // Session tracking
     private var sessionStartTime: Date?
     private var modelContext: ModelContext?
 
-    init() {
-        print("✅ LiveTranscriptViewModel initialized")
-        print("🔧 Using WORD-ARRAY TOKEN DIFF architecture")
+    // MARK: - Init
 
-        // Prepare haptic generators
+    init() {
         mediumHaptic.prepare()
         lightHaptic.prepare()
         errorHaptic.prepare()
-
-        // Setup audio interruption observer
         setupInterruptionObserver()
     }
 
@@ -74,212 +91,192 @@ final class LiveTranscriptViewModel {
         }
     }
 
+    // MARK: - Public API
+
     func setModelContext(_ context: ModelContext) {
         self.modelContext = context
-        print("✅ SwiftData ModelContext injected")
     }
 
+    private static let bundledModelName = "openai_whisper-small.en"
+
+    var installedModelIds: Set<String> {
+        Set([Self.bundledModelName])
+    }
+
+    func loadWhisperModel() async {
+        guard modelState == .notLoaded || modelState.isError else { return }
+
+        modelState = .loading
+
+        guard let modelFolder = locateBundledModel() else {
+            modelState = .error("Bundled speech model not found. Please reinstall the app.")
+            return
+        }
+
+        do {
+            let whisper = try await WhisperKit(
+                modelFolder: modelFolder,
+                verbose: true,
+                prewarm: false,
+                load: true,
+                download: false
+            )
+
+            self.whisperKit = whisper
+            activeModelId = Self.bundledModelName
+            modelState = .ready
+            print("✅ WhisperKit model loaded from bundle")
+        } catch {
+            modelState = .error(error.localizedDescription)
+            print("❌ WhisperKit load failed: \(error)")
+        }
+    }
+
+    private func locateBundledModel() -> String? {
+        let fm = FileManager.default
+
+        // Strategy 1: Folder name with dot — Bundle API may split on "." so try both
+        if let path = Bundle.main.path(forResource: Self.bundledModelName, ofType: nil) {
+            print("📂 Found model via path(forResource:ofType:nil): \(path)")
+            return path
+        }
+
+        // Strategy 2: The ".en" is treated as the extension
+        if let path = Bundle.main.path(forResource: "openai_whisper-small", ofType: "en") {
+            print("📂 Found model via path(forResource:ofType:en): \(path)")
+            return path
+        }
+
+        // Strategy 3: Direct path in resource bundle
+        if let resourceURL = Bundle.main.resourceURL {
+            let modelURL = resourceURL.appendingPathComponent(Self.bundledModelName)
+            if fm.fileExists(atPath: modelURL.path) {
+                print("📂 Found model via resourceURL: \(modelURL.path)")
+                return modelURL.path
+            }
+        }
+
+        // Strategy 4: Xcode may have flattened .mlmodelc files to the bundle root
+        // Check if AudioEncoder.mlmodelc exists at bundle root level
+        if let resourcePath = Bundle.main.resourcePath {
+            let audioEncoderPath = (resourcePath as NSString).appendingPathComponent("AudioEncoder.mlmodelc")
+            if fm.fileExists(atPath: audioEncoderPath) {
+                print("📂 Found model files at bundle root: \(resourcePath)")
+                return resourcePath
+            }
+        }
+
+        // Strategy 5: url(forResource:withExtension:subdirectory:)
+        if let url = Bundle.main.url(forResource: "AudioEncoder", withExtension: "mlmodelc", subdirectory: Self.bundledModelName) {
+            let modelDir = url.deletingLastPathComponent().path
+            print("📂 Found model via subdirectory: \(modelDir)")
+            return modelDir
+        }
+
+        // Debug: list bundle contents
+        if let resourcePath = Bundle.main.resourcePath {
+            let contents = (try? fm.contentsOfDirectory(atPath: resourcePath)) ?? []
+            print("❌ Model not found. Bundle root contains \(contents.count) items:")
+            for item in contents.sorted() {
+                print("   - \(item)")
+            }
+        }
+
+        return nil
+    }
+
+
     func startRecording() async {
-        print("\n🎙️ === START RECORDING SEQUENCE ===")
+        // Ensure model is loaded
+        if modelState != .ready {
+            await loadWhisperModel()
+        }
 
-        print("🔍 Step 1: Checking microphone permission...")
-        let micPermissionGranted: Bool
-        do {
-            micPermissionGranted = try await audioEngineManager.requestMicrophonePermission()
-            print(micPermissionGranted ? "✅ Microphone permission: GRANTED" : "❌ Microphone permission: DENIED")
-        } catch {
-            print("❌ Microphone permission request failed: \(error)")
-            errorMessage = "Microphone permission request failed: \(error.localizedDescription)"
+        guard modelState == .ready, let whisper = whisperKit, let tokenizer = whisper.tokenizer else {
+            errorMessage = "Speech model is not ready. Please try again."
             errorHaptic.notificationOccurred(.error)
             return
         }
 
-        guard micPermissionGranted else {
-            print("❌ Recording aborted: Microphone permission denied")
-            errorMessage = "Microphone permission is required to record audio."
-            errorHaptic.notificationOccurred(.error)
-            return
-        }
-
-        print("🔍 Step 2: Checking speech recognition permission...")
-        let speechPermissionGranted: Bool
-        do {
-            speechPermissionGranted = try await speechService.requestSpeechRecognitionPermission()
-            print(speechPermissionGranted ? "✅ Speech recognition permission: GRANTED" : "❌ Speech recognition permission: DENIED")
-        } catch {
-            print("❌ Speech recognition permission request failed: \(error)")
-            errorMessage = "Speech recognition permission request failed: \(error.localizedDescription)"
-            errorHaptic.notificationOccurred(.error)
-            return
-        }
-
-        guard speechPermissionGranted else {
-            print("❌ Recording aborted: Speech recognition permission denied")
-            errorMessage = "Speech recognition permission is required to transcribe audio."
-            errorHaptic.notificationOccurred(.error)
-            return
-        }
-
-        print("🔍 Step 3: Verifying speech recognizer availability...")
-        let recognizerAvailable = await speechService.isRecognizerAvailable
-        print(recognizerAvailable ? "✅ Speech recognizer: AVAILABLE" : "❌ Speech recognizer: UNAVAILABLE")
-
-        guard recognizerAvailable else {
-            print("❌ Recording aborted: Speech recognizer not available on device")
-            errorMessage = "On-device speech recognition is not available. Please ensure your device supports it."
-            errorHaptic.notificationOccurred(.error)
-            return
-        }
-
-        print("✅ Step 4: All permissions granted, initializing session...")
-
-        // Trigger medium haptic for recording start
         mediumHaptic.impactOccurred()
 
+        // Reset state
         isRecording = true
         isAutoScrollEnabled = true
         showSnapToLiveButton = false
         transcriptText = AttributedString("")
+        confirmedTranscriptText = ""
+        unconfirmedTranscriptText = ""
         errorMessage = nil
-
-        // Initialize session tracking
-        sessionStartTime = Date()
         rawTranscriptLedger = ""
-        lastProcessedWords = []
+        sessionStartTime = Date()
+        currentAudioLevel = 0.0
 
-        print("📝 Session initialized at: \(sessionStartTime!)")
+        // Create AudioStreamTranscriber with WhisperKit components
+        let options = DecodingOptions(
+            task: .transcribe,
+            language: "en",
+            temperature: 0.0,
+            usePrefillPrompt: true,
+            skipSpecialTokens: true,
+            withoutTimestamps: false
+        )
 
-        print("🎵 Step 5: Starting audio stream from hardware...")
-        let audioStream = await audioEngineManager.startAudioStream()
-        print("✅ Audio stream started successfully")
+        let transcriber = AudioStreamTranscriber(
+            audioEncoder: whisper.audioEncoder,
+            featureExtractor: whisper.featureExtractor,
+            segmentSeeker: whisper.segmentSeeker,
+            textDecoder: whisper.textDecoder,
+            tokenizer: tokenizer,
+            audioProcessor: whisper.audioProcessor,
+            decodingOptions: options,
+            requiredSegmentsForConfirmation: 2,
+            silenceThreshold: 0.3,
+            useVAD: true,
+            stateChangeCallback: { [weak self] oldState, newState in
+                Task { @MainActor [weak self] in
+                    self?.handleStateChange(oldState: oldState, newState: newState)
+                }
+            }
+        )
 
-        // Start audio level monitoring
-        let audioLevelStream = await audioEngineManager.startAudioLevelStream()
-        audioLevelTask = Task {
-            for await level in audioLevelStream {
-                await MainActor.run {
-                    self.currentAudioLevel = level
+        self.streamTranscriber = transcriber
+
+        // Start streaming in background task
+        transcriptionTask = Task {
+            do {
+                try await transcriber.startStreamTranscription()
+            } catch {
+                if !Task.isCancelled {
+                    await MainActor.run {
+                        self.errorMessage = "Transcription error: \(error.localizedDescription)"
+                        self.isRecording = false
+                    }
                 }
             }
         }
-
-        audioStreamTask = Task {
-            await processAudioStream(audioStream)
-        }
-
-        print("✅ === RECORDING STARTED SUCCESSFULLY ===\n")
     }
 
     func stopRecording() async {
-        print("\n🛑 === STOP RECORDING SEQUENCE ===")
-
-        // Trigger light haptic for recording stop
         lightHaptic.impactOccurred()
 
         guard let startTime = sessionStartTime else {
-            print("⚠️ No session start time found")
             isRecording = false
             return
         }
 
         let duration = Date().timeIntervalSince(startTime)
-        print("📊 Session duration: \(Int(duration)) seconds")
-
         isRecording = false
-
-        print("🔄 Cancelling audio level task...")
-        audioLevelTask?.cancel()
-        audioLevelTask = nil
         currentAudioLevel = 0.0
 
-        print("🔄 Cancelling audio stream task...")
-        audioStreamTask?.cancel()
-        audioStreamTask = nil
+        // Stop transcription
+        await streamTranscriber?.stopStreamTranscription()
+        transcriptionTask?.cancel()
+        transcriptionTask = nil
+        streamTranscriber = nil
 
-        print("🔄 Cancelling transcription stream task...")
-        transcriptionStreamTask?.cancel()
-        transcriptionStreamTask = nil
-
-        print("🔄 Stopping audio engine...")
-        await audioEngineManager.stopAudioStream()
-
-        print("🔄 Stopping speech service...")
-        await speechService.stopTranscription()
-
-        // Save session to SwiftData
+        // Save session
         await saveSessionToDatabase(duration: duration)
-
-        print("✅ === RECORDING STOPPED SUCCESSFULLY ===\n")
-    }
-
-    private func saveSessionToDatabase(duration: TimeInterval) async {
-        guard let context = modelContext else {
-            print("⚠️ No ModelContext available - session not saved")
-            return
-        }
-
-        guard !rawTranscriptLedger.isEmpty else {
-            print("⚠️ Empty transcript - not saving session")
-            return
-        }
-
-        print("💾 Saving session to database...")
-
-        // Generate session title from first few words
-        let words = rawTranscriptLedger.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
-        let titleWords = words.prefix(5).joined(separator: " ")
-        let sessionTitle = titleWords.isEmpty ? "Untitled Session" : titleWords
-
-        // Create session
-        let session = EchoSession(
-            title: sessionTitle,
-            durationSeconds: duration
-        )
-
-        // Create single chunk with full transcript
-        let chunk = TranscriptionChunk(
-            rawText: rawTranscriptLedger,
-            isFinal: true,
-            session: session
-        )
-
-        context.insert(session)
-        context.insert(chunk)
-
-        do {
-            try context.save()
-            print("✅ Session saved successfully")
-            print("   - Title: \(sessionTitle)")
-            print("   - Duration: \(Int(duration))s")
-            print("   - Transcript length: \(rawTranscriptLedger.count) chars")
-
-            // FEATURE 3: Index session in Core Spotlight
-            await indexSessionInSpotlight(session: session, transcriptText: rawTranscriptLedger)
-
-        } catch {
-            print("❌ Failed to save session: \(error)")
-            errorMessage = "Failed to save session: \(error.localizedDescription)"
-        }
-    }
-
-    private func indexSessionInSpotlight(session: EchoSession, transcriptText: String) async {
-        let attributeSet = CSSearchableItemAttributeSet(contentType: .text)
-        attributeSet.title = session.title
-        attributeSet.contentDescription = String(transcriptText.prefix(300))
-        attributeSet.timestamp = session.createdAt
-
-        let item = CSSearchableItem(
-            uniqueIdentifier: session.spotlightUniqueIdentifier,
-            domainIdentifier: EchoSession.spotlightDomainIdentifier,
-            attributeSet: attributeSet
-        )
-
-        do {
-            try await CSSearchableIndex.default().indexSearchableItems([item])
-            print("🔍 Indexed session in Spotlight: \(session.title)")
-        } catch {
-            print("❌ Spotlight indexing failed: \(error)")
-        }
     }
 
     func enableAutoScroll() {
@@ -297,6 +294,112 @@ final class LiveTranscriptViewModel {
         await updateUI()
     }
 
+    // MARK: - WhisperKit State Callback
+
+    private func handleStateChange(
+        oldState: AudioStreamTranscriber.State,
+        newState: AudioStreamTranscriber.State
+    ) {
+        // Update audio level from buffer energy
+        if let lastEnergy = newState.bufferEnergy.last {
+            currentAudioLevel = min(1.0, max(0.0, lastEnergy * 5.0))
+        }
+
+        // Extract confirmed segments (permanent)
+        let confirmedText = newState.confirmedSegments
+            .map { $0.text.trimmingCharacters(in: .whitespaces) }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
+
+        // Extract unconfirmed segments (transient)
+        let unconfirmedText = newState.unconfirmedSegments
+            .map { $0.text.trimmingCharacters(in: .whitespaces) }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespaces)
+
+        // Update ledger with confirmed text
+        if !confirmedText.isEmpty && confirmedText != confirmedTranscriptText {
+            confirmedTranscriptText = confirmedText
+            rawTranscriptLedger = confirmedText
+        }
+
+        unconfirmedTranscriptText = unconfirmedText
+
+        // Update UI
+        Task {
+            await updateUI()
+        }
+    }
+
+    // MARK: - UI Update
+
+    private func updateUI() async {
+        let displayText: String
+        if unconfirmedTranscriptText.isEmpty {
+            displayText = rawTranscriptLedger
+        } else {
+            displayText = rawTranscriptLedger +
+                (rawTranscriptLedger.isEmpty ? "" : " ") +
+                unconfirmedTranscriptText
+        }
+
+        guard !displayText.isEmpty else { return }
+
+        let processedText = await textProcessor.processText(
+            displayText,
+            highlightMode: selectedHighlightMode
+        )
+
+        transcriptText = processedText
+    }
+
+    // MARK: - Database Save
+
+    private func saveSessionToDatabase(duration: TimeInterval) async {
+        guard let context = modelContext else { return }
+        guard !rawTranscriptLedger.isEmpty else { return }
+
+        let words = rawTranscriptLedger
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+        let titleWords = words.prefix(5).joined(separator: " ")
+        let sessionTitle = titleWords.isEmpty ? "Untitled Session" : titleWords
+
+        let session = EchoSession(title: sessionTitle, durationSeconds: duration)
+        let chunk = TranscriptionChunk(
+            rawText: rawTranscriptLedger,
+            isFinal: true,
+            session: session
+        )
+
+        context.insert(session)
+        context.insert(chunk)
+
+        do {
+            try context.save()
+            await indexSessionInSpotlight(session: session)
+        } catch {
+            print("❌ Failed to save session: \(error)")
+        }
+    }
+
+    private func indexSessionInSpotlight(session: EchoSession) async {
+        let attributeSet = CSSearchableItemAttributeSet(contentType: .text)
+        attributeSet.title = session.title
+        attributeSet.contentDescription = String(rawTranscriptLedger.prefix(300))
+        attributeSet.timestamp = session.createdAt
+
+        let item = CSSearchableItem(
+            uniqueIdentifier: session.spotlightUniqueIdentifier,
+            domainIdentifier: EchoSession.spotlightDomainIdentifier,
+            attributeSet: attributeSet
+        )
+
+        try? await CSSearchableIndex.default().indexSearchableItems([item])
+    }
+
+    // MARK: - Audio Interruption
+
     private func setupInterruptionObserver() {
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification,
@@ -304,7 +407,6 @@ final class LiveTranscriptViewModel {
             queue: .main
         ) { [weak self] notification in
             guard let self = self else { return }
-
             guard let userInfo = notification.userInfo,
                   let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
                   let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
@@ -312,104 +414,12 @@ final class LiveTranscriptViewModel {
             }
 
             Task { @MainActor in
-                await self.handleAudioInterruption(type: type)
-            }
-        }
-
-        print("✅ Audio interruption observer registered")
-    }
-
-    private func handleAudioInterruption(type: AVAudioSession.InterruptionType) async {
-        switch type {
-        case .began:
-            print("🔔 AUDIO INTERRUPTION BEGAN (incoming call/FaceTime)")
-
-            if isRecording {
-                print("⏸️ Pausing recording due to interruption...")
-
-                // Gracefully stop recording
-                await stopRecording()
-
-                errorMessage = "Recording paused due to incoming call"
-                errorHaptic.notificationOccurred(.warning)
-            }
-
-        case .ended:
-            print("🔔 AUDIO INTERRUPTION ENDED")
-            // User can manually restart if needed
-
-        @unknown default:
-            print("⚠️ Unknown interruption type")
-        }
-    }
-
-    private func processAudioStream(_ audioStream: AsyncThrowingStream<AVAudioPCMBuffer, Error>) async {
-        print("🎤 Starting transcription service...")
-        let transcriptionStream = await speechService.startTranscription(audioStream: audioStream)
-        print("✅ Transcription service started\n")
-
-        transcriptionStreamTask = Task {
-            var updateCount = 0
-
-            do {
-                for await result in transcriptionStream {
-                    updateCount += 1
-                    await processWordArrayDiff(result.text, updateNumber: updateCount)
+                if type == .began && self.isRecording {
+                    await self.stopRecording()
+                    self.errorMessage = "Recording stopped due to interruption"
+                    self.errorHaptic.notificationOccurred(.warning)
                 }
-                print("⚠️ Transcription stream ended (total updates: \(updateCount))")
-            } catch {
-                print("❌ Transcription stream error: \(error)")
             }
-        }
-    }
-
-    private func processWordArrayDiff(_ incomingText: String, updateNumber: Int) async {
-        guard !incomingText.isEmpty else {
-            return
-        }
-
-        let incomingWords = incomingText.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
-        let incomingCount = incomingWords.count
-        let lastCount = lastProcessedWords.count
-
-        print("\n📝 Update #\(updateNumber): \(incomingCount) words")
-
-        // Check for utterance boundary
-        if incomingCount < lastCount {
-            print("   🔄 UTTERANCE BOUNDARY DETECTED")
-
-            let currentTime = Date()
-            let formatter = DateFormatter()
-            formatter.dateFormat = "HH:mm:ss"
-            let timeString = formatter.string(from: currentTime)
-
-            rawTranscriptLedger += "\n\n[\(timeString)]\n\n"
-            lastProcessedWords = []
-        }
-
-        // Extract new words
-        if incomingCount > lastCount {
-            let newWordCount = incomingCount - lastCount
-            let newWords = Array(incomingWords.suffix(newWordCount))
-
-            let spacing = rawTranscriptLedger.isEmpty ? "" : " "
-            rawTranscriptLedger += spacing + newWords.joined(separator: " ")
-
-            print("   ✅ Added \(newWordCount) new words")
-        }
-
-        lastProcessedWords = incomingWords
-
-        // Update UI
-        await updateUI()
-    }
-
-    private func updateUI() async {
-        // Pass selected highlight mode to text processor
-        let processedText = await textProcessor.processText(rawTranscriptLedger, highlightMode: selectedHighlightMode)
-
-        await MainActor.run {
-            transcriptText = processedText
         }
     }
 }

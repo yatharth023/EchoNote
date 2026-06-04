@@ -42,6 +42,12 @@ struct HistoryListView: View {
                     spotlightSessionID = nil
                 }
             }
+            .onAppear {
+                if let sessionID = spotlightSessionID {
+                    navigateToSession(id: sessionID)
+                    spotlightSessionID = nil
+                }
+            }
         }
     }
 

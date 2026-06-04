@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		096BA9E62FD204A600B2BFD5 /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = 096BA9E52FD204A600B2BFD5 /* WhisperKit */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		096BA98B2FD00A5700B2BFD5 /* EchoNote.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EchoNote.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -16,6 +20,11 @@
 			path = EchoNote;
 			sourceTree = "<group>";
 		};
+		096BAA2F2FD2207B00B2BFD5 /* openai_whisper-small.en */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "openai_whisper-small.en";
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -23,6 +32,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				096BA9E62FD204A600B2BFD5 /* WhisperKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -32,6 +42,7 @@
 		096BA9822FD00A5600B2BFD5 = {
 			isa = PBXGroup;
 			children = (
+				096BAA2F2FD2207B00B2BFD5 /* openai_whisper-small.en */,
 				096BA98D2FD00A5700B2BFD5 /* EchoNote */,
 				096BA98C2FD00A5700B2BFD5 /* Products */,
 			);
@@ -62,9 +73,11 @@
 			);
 			fileSystemSynchronizedGroups = (
 				096BA98D2FD00A5700B2BFD5 /* EchoNote */,
+				096BAA2F2FD2207B00B2BFD5 /* openai_whisper-small.en */,
 			);
 			name = EchoNote;
 			packageProductDependencies = (
+				096BA9E52FD204A600B2BFD5 /* WhisperKit */,
 			);
 			productName = EchoNote;
 			productReference = 096BA98B2FD00A5700B2BFD5 /* EchoNote.app */;
@@ -94,6 +107,9 @@
 			);
 			mainGroup = 096BA9822FD00A5600B2BFD5;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				096BA9E42FD204A600B2BFD5 /* XCRemoteSwiftPackageReference "WhisperKit" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 096BA98C2FD00A5700B2BFD5 /* Products */;
 			projectDirPath = "";
@@ -255,7 +271,6 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "EchoNote requires microphone access to capture and process live lectures and spoken audio.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "EchoNote utilizes speech recognition to turn spoken audio into real-time scannable text on your device.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -289,7 +304,6 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "EchoNote requires microphone access to capture and process live lectures and spoken audio.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "EchoNote utilizes speech recognition to turn spoken audio into real-time scannable text on your device.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -334,6 +348,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		096BA9E42FD204A600B2BFD5 /* XCRemoteSwiftPackageReference "WhisperKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/argmaxinc/WhisperKit";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		096BA9E52FD204A600B2BFD5 /* WhisperKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 096BA9E42FD204A600B2BFD5 /* XCRemoteSwiftPackageReference "WhisperKit" */;
+			productName = WhisperKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 096BA9832FD00A5600B2BFD5 /* Project object */;
 }

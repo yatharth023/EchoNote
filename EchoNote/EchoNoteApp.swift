@@ -14,6 +14,8 @@ struct EchoNoteApp: App {
 
     @State private var selectedTab: Int = 0
     @State private var spotlightSessionID: UUID?
+    @State private var showOnboarding: Bool = false
+    @State private var viewModel = LiveTranscriptViewModel()
 
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
@@ -23,11 +25,8 @@ struct EchoNoteApp: App {
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
         do {
-            let container = try ModelContainer(for: schema, configurations: [modelConfiguration])
-            print("✅ SwiftData ModelContainer initialized successfully")
-            return container
+            return try ModelContainer(for: schema, configurations: [modelConfiguration])
         } catch {
-            print("❌ FATAL: Could not create ModelContainer: \(error)")
             fatalError("Could not create ModelContainer: \(error)")
         }
     }()
@@ -35,7 +34,7 @@ struct EchoNoteApp: App {
     var body: some Scene {
         WindowGroup {
             TabView(selection: $selectedTab) {
-                LiveTranscriptView()
+                LiveTranscriptView(viewModel: viewModel)
                     .tabItem {
                         Label("Record", systemImage: "mic.circle")
                     }
@@ -46,35 +45,46 @@ struct EchoNoteApp: App {
                         Label("History", systemImage: "list.bullet")
                     }
                     .tag(1)
+
+                SettingsView(viewModel: viewModel)
+                    .tabItem {
+                        Label("Settings", systemImage: "gear")
+                    }
+                    .tag(2)
             }
             .onAppear {
-                print("✅ EchoNote app launched successfully")
+                checkFirstLaunch()
             }
             .onContinueUserActivity(CSSearchableItemActionType) { userActivity in
                 handleSpotlightActivity(userActivity)
+            }
+            .fullScreenCover(isPresented: $showOnboarding) {
+                ModelSetupView(viewModel: viewModel) {
+                    showOnboarding = false
+                    UserDefaults.standard.set(true, forKey: "echoNote.hasCompletedOnboarding")
+                }
             }
         }
         .modelContainer(sharedModelContainer)
     }
 
+    private func checkFirstLaunch() {
+        let hasLaunched = UserDefaults.standard.bool(forKey: "echoNote.hasCompletedOnboarding")
+        if !hasLaunched {
+            showOnboarding = true
+        }
+    }
+
     private func handleSpotlightActivity(_ userActivity: NSUserActivity) {
         guard let uniqueIdentifier = userActivity.userInfo?[CSSearchableItemActivityIdentifier] as? String else {
-            print("⚠️ No Spotlight identifier found in activity")
             return
         }
 
-        print("🔍 Spotlight deep-link received: \(uniqueIdentifier)")
-
-        // Extract UUID from identifier (format: "com.yatharth.EchoNote.sessions.<UUID>")
         let components = uniqueIdentifier.components(separatedBy: ".")
         guard let uuidString = components.last, let sessionUUID = UUID(uuidString: uuidString) else {
-            print("⚠️ Could not extract session UUID from identifier")
             return
         }
 
-        print("🔍 Navigating to session: \(sessionUUID)")
-
-        // Switch to History tab and pass the session ID for navigation
         selectedTab = 1
         spotlightSessionID = sessionUUID
     }

@@ -51,13 +51,9 @@ actor TextProcessingService {
             let wordLength = word.count
             let boldLength = max(1, Int(Double(wordLength) * bionicBoldRatio))
 
-            let boldEndIndex = word.index(word.startIndex, offsetBy: boldLength)
-            let boldPortion = word[word.startIndex..<boldEndIndex]
-
-            guard let boldRange = rawText.range(of: String(boldPortion), range: wordRange) else {
-                currentIndex = wordRange.upperBound
-                continue
-            }
+            let boldStart = wordRange.lowerBound
+            let boldEnd = rawText.index(boldStart, offsetBy: boldLength)
+            let boldRange = boldStart..<boldEnd
 
             if let attributedRange = Range(boldRange, in: attributedString) {
                 attributedString[attributedRange].inlinePresentationIntent = .stronglyEmphasized
