@@ -33,14 +33,21 @@ struct ModelManagementView: View {
             Section("Available Models") {
                 ForEach(models) { model in
                     let isActive = viewModel.activeModelId == model.id
-                    let isBundled = viewModel.installedModelIds.contains(model.id)
+                    let isDownloaded = viewModel.installedModelIds.contains(model.id)
+                    let isDownloading = viewModel.downloadingModelId == model.id
                     ModelRowView(
                         model: model,
                         isRecommended: model.id == deviceTier.recommendedModelId,
-                        isDownloading: false,
+                        isDownloading: isDownloading,
                         isActive: isActive,
-                        isDownloaded: isBundled,
-                        downloadProgress: 0
+                        isDownloaded: isDownloaded,
+                        downloadProgress: isDownloading ? viewModel.downloadProgress : 0,
+                        onDownload: {
+                            Task { await viewModel.downloadAndActivateModel(model.id) }
+                        },
+                        onActivate: {
+                            Task { await viewModel.activateModel(model.id) }
+                        }
                     )
                 }
             }
@@ -71,7 +78,9 @@ struct ModelRowView: View {
     let isDownloading: Bool
     var isActive: Bool = false
     var isDownloaded: Bool = false
-    let downloadProgress: Double
+    var downloadProgress: Double = 0
+    var onDownload: (() -> Void)?
+    var onActivate: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -101,15 +110,23 @@ struct ModelRowView: View {
                 if isActive {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
+                        .font(.title2)
                 } else if isDownloading {
-                    ProgressView()
+                    CircularDownloadProgress(progress: downloadProgress)
+                        .frame(width: 28, height: 28)
                 } else if isDownloaded {
-                    Label("Downloaded", systemImage: "checkmark.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Button("Activate") {
+                        onActivate?()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
                 } else {
-                    Image(systemName: "arrow.down.circle")
-                        .foregroundStyle(.secondary)
+                    Button {
+                        onDownload?()
+                    } label: {
+                        Image(systemName: "icloud.and.arrow.down")
+                            .font(.title3)
+                    }
                 }
             }
 
@@ -121,9 +138,38 @@ struct ModelRowView: View {
                 Label("~\(model.estimatedLatencyMs)ms", systemImage: "clock")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if isDownloading {
+                    Text("\(Int(downloadProgress * 100))%")
+                        .font(.caption)
+                        .fontWeight(.medium)
+                        .foregroundStyle(.blue)
+                }
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+struct CircularDownloadProgress: View {
+
+    var progress: Double
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.blue.opacity(0.2), lineWidth: 3)
+
+            Circle()
+                .trim(from: 0, to: progress)
+                .stroke(Color.blue, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .animation(.linear(duration: 0.2), value: progress)
+
+            Image(systemName: "stop.fill")
+                .font(.system(size: 8))
+                .foregroundStyle(.blue)
+        }
     }
 }
 

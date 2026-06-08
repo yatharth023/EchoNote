@@ -98,9 +98,106 @@ final class LiveTranscriptViewModel {
     }
 
     private static let bundledModelName = "openai_whisper-small.en"
+    private static let installedModelsKey = "echoNote.installedModels"
+    private static let modelPathsKey = "echoNote.modelPaths"
+
+    var downloadingModelId: String?
+    var downloadProgress: Double = 0
 
     var installedModelIds: Set<String> {
-        Set([Self.bundledModelName])
+        var ids = Set(UserDefaults.standard.stringArray(forKey: Self.installedModelsKey) ?? [])
+        ids.insert(Self.bundledModelName)
+        return ids
+    }
+
+    func downloadAndActivateModel(_ modelId: String) async {
+        guard downloadingModelId == nil else { return }
+
+        downloadingModelId = modelId
+        downloadProgress = 0
+
+        do {
+            let modelFolder = try await WhisperKit.download(
+                variant: modelId,
+                progressCallback: { [weak self] progress in
+                    Task { @MainActor [weak self] in
+                        self?.downloadProgress = progress.fractionCompleted
+                    }
+                }
+            )
+
+            let modelPath = modelFolder.path
+            saveModelPath(modelId, path: modelPath)
+            markModelInstalled(modelId)
+
+            let whisper = try await WhisperKit(
+                modelFolder: modelPath,
+                verbose: true,
+                prewarm: false,
+                load: true,
+                download: false
+            )
+
+            self.whisperKit = whisper
+            activeModelId = modelId
+            modelState = .ready
+            downloadProgress = 1.0
+            print("✅ Downloaded and activated model: \(modelId)")
+        } catch {
+            print("❌ Model download failed: \(error)")
+        }
+
+        downloadingModelId = nil
+    }
+
+    func activateModel(_ modelId: String) async {
+        if modelId == Self.bundledModelName {
+            activeModelId = nil
+            modelState = .notLoaded
+            await loadWhisperModel()
+        } else {
+            guard let modelPath = getModelPath(modelId) else {
+                print("❌ No stored path for model: \(modelId)")
+                return
+            }
+
+            modelState = .loading
+            do {
+                let whisper = try await WhisperKit(
+                    modelFolder: modelPath,
+                    verbose: true,
+                    prewarm: false,
+                    load: true,
+                    download: false
+                )
+                self.whisperKit = whisper
+                activeModelId = modelId
+                modelState = .ready
+                print("✅ Activated model: \(modelId)")
+            } catch {
+                modelState = .error(error.localizedDescription)
+                print("❌ Failed to activate model: \(error)")
+            }
+        }
+    }
+
+    private func markModelInstalled(_ modelId: String) {
+        var installed = UserDefaults.standard.stringArray(forKey: Self.installedModelsKey) ?? []
+        if !installed.contains(modelId) {
+            installed.append(modelId)
+            UserDefaults.standard.set(installed, forKey: Self.installedModelsKey)
+        }
+    }
+
+    private func saveModelPath(_ modelId: String, path: String) {
+        var paths = UserDefaults.standard.dictionary(forKey: Self.modelPathsKey) as? [String: String] ?? [:]
+        paths[modelId] = path
+        UserDefaults.standard.set(paths, forKey: Self.modelPathsKey)
+    }
+
+    private func getModelPath(_ modelId: String) -> String? {
+        let paths = UserDefaults.standard.dictionary(forKey: Self.modelPathsKey) as? [String: String] ?? [:]
+        return paths[modelId]
     }
 
     func loadWhisperModel() async {

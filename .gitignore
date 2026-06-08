@@ -10,6 +10,9 @@ xcuserdata/
 *.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/configuration/
 *.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
+# Xcode user interface state (binary, changes on every window resize)
+*.xcuserstate
+
 # Build artifacts
 build/
 DerivedData/
@@ -20,6 +23,8 @@ DerivedData/
 *.hmap
 *.app
 *.xcarchive
+*.xcresult
+TestResults/
 
 # Swift Package Manager
 .build/
@@ -75,3 +80,15 @@ playground.xcworkspace
 .env
 .env.*
 *.xcconfig.local
+
+# Hugging Face download cache (inside model directories)
+**/.cache/
+**/CACHEDIR.TAG
+**/*.metadata
+
+# Log files
+*.log
+
+# Compiled Python (if any tooling scripts present)
+__pycache__/
+*.py[cod]
