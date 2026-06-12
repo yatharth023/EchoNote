@@ -112,9 +112,14 @@ final class LiveTranscriptViewModel {
 
     func downloadAndActivateModel(_ modelId: String) async {
         guard downloadingModelId == nil else { return }
+        guard !isRecording else {
+            errorMessage = "Stop recording before changing models."
+            return
+        }
 
         downloadingModelId = modelId
         downloadProgress = 0
+        modelState = .downloading
 
         do {
             let modelFolder = try await WhisperKit.download(
@@ -130,6 +135,7 @@ final class LiveTranscriptViewModel {
             saveModelPath(modelId, path: modelPath)
             markModelInstalled(modelId)
 
+            modelState = .loading
             let whisper = try await WhisperKit(
                 modelFolder: modelPath,
                 verbose: true,
@@ -144,6 +150,8 @@ final class LiveTranscriptViewModel {
             downloadProgress = 1.0
             print("✅ Downloaded and activated model: \(modelId)")
         } catch {
+            modelState = .error(error.localizedDescription)
+            errorMessage = "Model download failed: \(error.localizedDescription)"
             print("❌ Model download failed: \(error)")
         }
 
@@ -151,33 +159,63 @@ final class LiveTranscriptViewModel {
     }
 
     func activateModel(_ modelId: String) async {
+        guard !isRecording else {
+            errorMessage = "Stop recording before switching models."
+            return
+        }
+        guard downloadingModelId == nil else { return }
+        guard activeModelId != modelId else { return }
+
+        // Resolve the model path up front so we can fail fast before the
+        // optimistic UI flip below.
+        let resolvedPath: String?
         if modelId == Self.bundledModelName {
-            activeModelId = nil
-            modelState = .notLoaded
-            await loadWhisperModel()
-        } else {
-            guard let modelPath = getModelPath(modelId) else {
-                print("❌ No stored path for model: \(modelId)")
+            resolvedPath = locateBundledModel()
+            if resolvedPath == nil {
+                modelState = .error("Bundled speech model not found. Please reinstall the app.")
+                errorMessage = "Bundled speech model not found."
                 return
             }
-
-            modelState = .loading
-            do {
-                let whisper = try await WhisperKit(
-                    modelFolder: modelPath,
-                    verbose: true,
-                    prewarm: false,
-                    load: true,
-                    download: false
-                )
-                self.whisperKit = whisper
-                activeModelId = modelId
-                modelState = .ready
-                print("✅ Activated model: \(modelId)")
-            } catch {
-                modelState = .error(error.localizedDescription)
-                print("❌ Failed to activate model: \(error)")
+        } else {
+            guard let storedPath = getModelPath(modelId),
+                  FileManager.default.fileExists(atPath: storedPath) else {
+                unmarkModelInstalled(modelId)
+                modelState = .error("Model files missing. Please re-download.")
+                errorMessage = "Model files missing. Please re-download."
+                print("❌ No usable stored path for model: \(modelId)")
+                return
             }
+            resolvedPath = storedPath
+        }
+
+        guard let modelFolder = resolvedPath else { return }
+
+        // Optimistically flip the active model so the green tick moves to the
+        // tapped row immediately. We'll revert if the load fails.
+        let previousActiveModelId = activeModelId
+        let previousWhisperKit = whisperKit
+
+        activeModelId = modelId
+        modelState = .loading
+
+        do {
+            let whisper = try await WhisperKit(
+                modelFolder: modelFolder,
+                verbose: true,
+                prewarm: false,
+                load: true,
+                download: false
+            )
+            self.whisperKit = whisper
+            modelState = .ready
+            print("✅ Activated model: \(modelId)")
+        } catch {
+            // Revert optimistic state on failure.
+            self.whisperKit = previousWhisperKit
+            activeModelId = previousActiveModelId
+            modelState = .error(error.localizedDescription)
+            errorMessage = "Failed to activate model: \(error.localizedDescription)"
+            print("❌ Failed to activate model: \(error)")
         }
     }
 
@@ -187,6 +225,15 @@ final class LiveTranscriptViewModel {
             installed.append(modelId)
             UserDefaults.standard.set(installed, forKey: Self.installedModelsKey)
         }
+    }
+
+    private func unmarkModelInstalled(_ modelId: String) {
+        var installed = UserDefaults.standard.stringArray(forKey: Self.installedModelsKey) ?? []
+        installed.removeAll { $0 == modelId }
+        UserDefaults.standard.set(installed, forKey: Self.installedModelsKey)
+        var paths = UserDefaults.standard.dictionary(forKey: Self.modelPathsKey) as? [String: String] ?? [:]
+        paths.removeValue(forKey: modelId)
+        UserDefaults.standard.set(paths, forKey: Self.modelPathsKey)
     }
 
     private func saveModelPath(_ modelId: String, path: String) {
@@ -474,25 +521,10 @@ final class LiveTranscriptViewModel {
 
         do {
             try context.save()
-            await indexSessionInSpotlight(session: session)
+            SpotlightIndexer.index(session: session)
         } catch {
             print("❌ Failed to save session: \(error)")
         }
-    }
-
-    private func indexSessionInSpotlight(session: EchoSession) async {
-        let attributeSet = CSSearchableItemAttributeSet(contentType: .text)
-        attributeSet.title = session.title
-        attributeSet.contentDescription = String(rawTranscriptLedger.prefix(300))
-        attributeSet.timestamp = session.createdAt
-
-        let item = CSSearchableItem(
-            uniqueIdentifier: session.spotlightUniqueIdentifier,
-            domainIdentifier: EchoSession.spotlightDomainIdentifier,
-            attributeSet: attributeSet
-        )
-
-        try? await CSSearchableIndex.default().indexSearchableItems([item])
     }
 
     // MARK: - Audio Interruption

@@ -8,13 +8,11 @@ import SwiftUI
 struct SettingsView: View {
 
     @Bindable var viewModel: LiveTranscriptViewModel
-
-    @State private var selectedTextSize: Double = 17
-    @State private var highContrastEnabled: Bool = false
-    @State private var reducedMotion: Bool = false
-    @State private var autoScrollSpeed: Double = 1.0
+    @Environment(AppSettings.self) private var settings
 
     var body: some View {
+        @Bindable var settings = settings
+
         NavigationStack {
             List {
                 Section("Speech Model") {
@@ -34,20 +32,29 @@ struct SettingsView: View {
 
                 Section("Accessibility") {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Text Size: \(Int(selectedTextSize))pt")
+                        Text("Text Size: \(Int(settings.textSize))pt")
                             .font(.subheadline)
-                        Slider(value: $selectedTextSize, in: 14...40, step: 1)
+                        Slider(value: $settings.textSize, in: 14...40, step: 1)
+
+                        Text("The quick brown fox jumps over the lazy dog.")
+                            .font(.system(size: CGFloat(settings.textSize),
+                                          weight: settings.highContrast ? .semibold : .regular))
+                            .foregroundStyle(settings.transcriptForeground)
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(settings.transcriptBackground,
+                                        in: RoundedRectangle(cornerRadius: 8))
                     }
 
-                    Toggle("High Contrast Mode", isOn: $highContrastEnabled)
+                    Toggle("High Contrast Mode", isOn: $settings.highContrast)
 
-                    Toggle("Reduce Motion", isOn: $reducedMotion)
+                    Toggle("Reduce Motion", isOn: $settings.reduceMotion)
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Auto-Scroll Speed")
                             .font(.subheadline)
-                        Slider(value: $autoScrollSpeed, in: 0.5...2.0, step: 0.25)
-                        Text(autoScrollSpeed == 1.0 ? "Normal" : String(format: "%.2fx", autoScrollSpeed))
+                        Slider(value: $settings.autoScrollSpeed, in: 0.5...2.0, step: 0.25)
+                        Text(settings.autoScrollSpeedLabel)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -83,4 +90,5 @@ struct SettingsView: View {
 
 #Preview {
     SettingsView(viewModel: LiveTranscriptViewModel())
+        .environment(AppSettings())
 }

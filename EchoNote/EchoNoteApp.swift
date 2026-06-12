@@ -16,6 +16,7 @@ struct EchoNoteApp: App {
     @State private var spotlightSessionID: UUID?
     @State private var showOnboarding: Bool = false
     @State private var viewModel = LiveTranscriptViewModel()
+    @State private var settings = AppSettings()
 
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
@@ -52,8 +53,11 @@ struct EchoNoteApp: App {
                     }
                     .tag(2)
             }
+            .environment(settings)
+            .preferredColorScheme(settings.highContrast ? .light : nil)
             .onAppear {
                 checkFirstLaunch()
+                reindexAllSessionsInSpotlight()
             }
             .onContinueUserActivity(CSSearchableItemActionType) { userActivity in
                 handleSpotlightActivity(userActivity)
@@ -87,5 +91,15 @@ struct EchoNoteApp: App {
 
         selectedTab = 1
         spotlightSessionID = sessionUUID
+    }
+
+    private func reindexAllSessionsInSpotlight() {
+        let container = sharedModelContainer
+        Task { @MainActor in
+            let context = ModelContext(container)
+            let descriptor = FetchDescriptor<EchoSession>()
+            guard let sessions = try? context.fetch(descriptor) else { return }
+            await SpotlightIndexer.indexAll(sessions)
+        }
     }
 }

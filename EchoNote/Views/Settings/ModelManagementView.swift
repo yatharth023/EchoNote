@@ -35,12 +35,14 @@ struct ModelManagementView: View {
                     let isActive = viewModel.activeModelId == model.id
                     let isDownloaded = viewModel.installedModelIds.contains(model.id)
                     let isDownloading = viewModel.downloadingModelId == model.id
+                    let isActivating = isActive && viewModel.modelState == .loading
                     ModelRowView(
                         model: model,
                         isRecommended: model.id == deviceTier.recommendedModelId,
                         isDownloading: isDownloading,
                         isActive: isActive,
                         isDownloaded: isDownloaded,
+                        isActivating: isActivating,
                         downloadProgress: isDownloading ? viewModel.downloadProgress : 0,
                         onDownload: {
                             Task { await viewModel.downloadAndActivateModel(model.id) }
@@ -49,6 +51,7 @@ struct ModelManagementView: View {
                             Task { await viewModel.activateModel(model.id) }
                         }
                     )
+                    .animation(.easeInOut(duration: 0.2), value: isActive)
                 }
             }
 
@@ -78,6 +81,7 @@ struct ModelRowView: View {
     let isDownloading: Bool
     var isActive: Bool = false
     var isDownloaded: Bool = false
+    var isActivating: Bool = false
     var downloadProgress: Double = 0
     var onDownload: (() -> Void)?
     var onActivate: (() -> Void)?
@@ -108,9 +112,16 @@ struct ModelRowView: View {
                 Spacer()
 
                 if isActive {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .font(.title2)
+                    HStack(spacing: 6) {
+                        if isActivating {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .font(.title2)
+                            .transition(.scale.combined(with: .opacity))
+                    }
                 } else if isDownloading {
                     CircularDownloadProgress(progress: downloadProgress)
                         .frame(width: 28, height: 28)

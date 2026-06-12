@@ -7,10 +7,12 @@
 
 import SwiftUI
 import SwiftData
+import CoreSpotlight
 
 struct SessionDetailView: View {
 
     @Environment(\.modelContext) private var modelContext
+    @Environment(AppSettings.self) private var settings
     let session: EchoSession
 
     @State private var searchManager = TranscriptSearchManager()
@@ -39,7 +41,7 @@ struct SessionDetailView: View {
                 }
                 .onChange(of: scrollTarget) { _, target in
                     guard let target else { return }
-                    withAnimation(.easeInOut(duration: 0.3)) {
+                    withAnimation(settings.scrollAnimation) {
                         proxy.scrollTo("chunk-\(target)", anchor: .center)
                     }
                     scrollTarget = nil
@@ -133,9 +135,13 @@ struct SessionDetailView: View {
                     }
 
                     Text(searchManager.highlightedText(for: chunk.rawText, chunkIndex: index))
-                        .font(.body)
+                        .font(settings.transcriptFont)
+                        .foregroundStyle(settings.transcriptForeground)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(settings.highContrast ? 8 : 0)
+                        .background(settings.transcriptBackground,
+                                    in: RoundedRectangle(cornerRadius: 8))
 
                     Divider()
                 }
@@ -154,6 +160,7 @@ struct SessionDetailView: View {
         do {
             try modelContext.save()
             print("✅ Updated session title: \(editedTitle)")
+            SpotlightIndexer.index(session: session)
         } catch {
             print("❌ Failed to save title: \(error)")
         }
@@ -191,4 +198,5 @@ struct SessionDetailView: View {
 
     return SessionDetailView(session: session)
         .modelContainer(container)
+        .environment(AppSettings())
 }

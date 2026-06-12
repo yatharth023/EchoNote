@@ -9,10 +9,12 @@ EchoNote is an offline-first, privacy-first iOS app that provides real-time spee
 - **Linguistic highlight filters** — highlight verbs (blue), nouns (green), or both via Apple's NaturalLanguage framework (`NLTagger`)
 - **Audio waveform visualizer** — animated 9-bar amplitude display driven by real-time buffer energy during recording
 - **Auto-scroll with snap** — transcript follows live speech; a floating "Snap to Live Voice" button re-anchors on manual scroll
+- **Accessibility settings** — persistent text size, high-contrast mode, reduce-motion, and auto-scroll-speed controls that propagate live to the transcript and history views via an `@Observable AppSettings` model injected through the environment
 - **Session history** — all sessions persisted with SwiftData; browse, delete (swipe), and rename titles inline
+- **Content-aware history search** — the History search bar matches both session titles and the full transcript text of every chunk, and renders an inline snippet preview with the matched keyword highlighted
 - **In-session full-text search** — regex-backed search across saved transcripts with yellow/orange match highlighting and prev/next navigation
-- **Core Spotlight integration** — sessions are indexed system-wide and deep-linkable directly from iOS Spotlight search
-- **Model management** — bundled `openai_whisper-small.en` (~217 MB) plus downloadable Large v3 and Large v3 Turbo variants with in-app progress tracking
+- **Core Spotlight integration** — sessions are indexed system-wide via `SpotlightIndexer` (bulk re-index on launch, single-session re-index on title edit, and removal on delete); tapping a Spotlight result switches to the History tab and opens that transcript directly
+- **Model management** — bundled `openai_whisper-small.en` (~217 MB) plus downloadable Large v3 and Large v3 Turbo variants with in-app progress tracking; activation is optimistic (the green tick moves instantly with a small in-progress spinner) and reverts cleanly if the load fails
 - **Device-aware model recommendations** — `DeviceCapabilityAnalyzer` inspects RAM and CPU core count to recommend the optimal model tier
 - **Onboarding flow** — first-launch screen loads the bundled model before any recording starts
 - **Haptic feedback** — medium, light, and error notification haptics tied to record/stop and error events
@@ -41,27 +43,29 @@ EchoNote is an offline-first, privacy-first iOS app that provides real-time spee
 
 ```
 EchoNote/
-├── EchoNoteApp.swift                    # App entry, TabView, Spotlight handler, onboarding gate
+├── EchoNoteApp.swift                    # App entry, TabView, Spotlight handler, onboarding gate, bulk Spotlight re-index on launch, AppSettings injection
 ├── Models/
+│   ├── AppSettings.swift                # @Observable, UserDefaults-backed accessibility prefs (text size, high contrast, reduce motion, auto-scroll speed) exposed via environment
 │   ├── EchoSession.swift                # SwiftData model: session metadata + Spotlight identifiers
 │   ├── TranscriptionChunk.swift         # SwiftData model: raw text segment per recording
 │   └── WhisperModelInfo.swift           # Model catalog (small.en, large-v3, large-v3-turbo)
 ├── ViewModels/
-│   └── LiveTranscriptViewModel.swift    # Core VM: WhisperKit lifecycle, session save, UI state
+│   └── LiveTranscriptViewModel.swift    # Core VM: WhisperKit lifecycle, optimistic model activation, session save, UI state
 ├── Views/
 │   ├── Live/
-│   │   └── LiveTranscriptView.swift     # Recording screen, waveform, highlight mode picker
+│   │   └── LiveTranscriptView.swift     # Recording screen, waveform, highlight mode picker (reads AppSettings)
 │   ├── History/
-│   │   ├── HistoryListView.swift        # Session list with search and swipe-to-delete
-│   │   ├── SessionDetailView.swift      # Full transcript with in-session search and title edit
+│   │   ├── HistoryListView.swift        # Session list, content-aware search across chunks, swipe-to-delete (with Spotlight cleanup)
+│   │   ├── SessionDetailView.swift      # Full transcript with in-session search, title edit (re-indexes Spotlight)
 │   │   └── TranscriptSearchBar.swift    # Search bar UI component
 │   ├── Settings/
-│   │   ├── SettingsView.swift           # Accessibility options (text size, contrast, motion)
-│   │   └── ModelManagementView.swift    # Download/activate Whisper model variants
+│   │   ├── SettingsView.swift           # Live-bound accessibility options + preview swatch
+│   │   └── ModelManagementView.swift    # Download/activate Whisper variants with instant green-tick swap and in-progress spinner
 │   └── Onboarding/
 │       └── ModelSetupView.swift         # First-launch model load screen
 └── Services/
     ├── Processing/
+    │   ├── SpotlightIndexer.swift           # Centralized CoreSpotlight index/indexAll/remove for EchoSession
     │   ├── TextProcessingService.swift      # Bionic reading + NL lexical tagging (Swift actor)
     │   └── TranscriptSearchManager.swift    # Regex search and match navigation across chunks
     └── ModelManagement/
@@ -110,9 +114,16 @@ Larger models — **Large v3** (~947 MB) and **Large v3 Turbo** (~954 MB) — ca
 
 3. **Text processing** — `TextProcessingService` (a Swift actor) applies two passes: bionic bold emphasis via `AttributedString`, then foreground color annotation using `NLTagger` for the selected `HighlightMode`.
 
-4. **Persistence** — on `stopRecording()`, the confirmed ledger is saved as an `EchoSession` + `TranscriptionChunk` pair in SwiftData. The session is then indexed via `CSSearchableIndex` for Spotlight.
+4. **Persistence** — on `stopRecording()`, the confirmed ledger is saved as an `EchoSession` + `TranscriptionChunk` pair in SwiftData. The session is then handed to `SpotlightIndexer.index(session:)`, which writes a `CSSearchableItem` with the title, a 200-char content preview, the creation timestamp, and tokenized keywords.
 
-5. **Search** — `TranscriptSearchManager` builds a cached `NSRegularExpression` from the query and scans all chunk strings, tracking `(chunkIndex, range)` matches. `SessionDetailView` uses `ScrollViewReader` to animate to the current match.
+5. **Search**
+    - **In-session search** — `TranscriptSearchManager` builds a cached `NSRegularExpression` from the query and scans all chunk strings, tracking `(chunkIndex, range)` matches. `SessionDetailView` uses `ScrollViewReader` to animate to the current match.
+    - **History tab search** — `HistoryListView.filteredSessions` matches the query against every session's title *and* the `rawText` of every chunk it owns. Each row renders a contextual snippet (±40 chars around the hit) with the keyword highlighted.
+    - **System Spotlight** — `EchoNoteApp.reindexAllSessionsInSpotlight()` runs on launch via `SpotlightIndexer.indexAll(_:)` so previously-saved sessions stay searchable from iOS Spotlight. Title edits re-index a single item; deletes remove it. Tapping a Spotlight hit hits `onContinueUserActivity(CSSearchableItemActionType)`, switches to the History tab, and pushes `SessionDetailView` for the matched UUID.
+
+6. **Accessibility settings** — `AppSettings` is an `@Observable` class created once in `EchoNoteApp`, injected via `.environment(settings)`, and persists every change to `UserDefaults`. Views read it with `@Environment(AppSettings.self)` and apply `transcriptFont`, `transcriptForeground`/`transcriptBackground`, and `scrollAnimation` — so adjusting a slider in Settings instantly retitles fonts, colors, and animation curves throughout the app.
+
+7. **Model activation** — `activateModel(_:)` resolves the model path *before* mutating state, then optimistically flips `activeModelId` to the tapped model so the green tick moves instantly. The actual `WhisperKit(...)` load happens in the background; if it throws, the previous active model and `WhisperKit` instance are restored. While loading, `ModelManagementView` shows a small `ProgressView` beside the green tick.
 
 ## Privacy
 

@@ -11,6 +11,7 @@ import SwiftData
 struct LiveTranscriptView: View {
 
     @Environment(\.modelContext) private var modelContext
+    @Environment(AppSettings.self) private var settings
     @Bindable var viewModel: LiveTranscriptViewModel
     @State private var scrollViewID = UUID()
 
@@ -70,11 +71,15 @@ struct LiveTranscriptView: View {
                         emptyStateView
                     } else {
                         Text(viewModel.transcriptText)
-                            .font(.body)
+                            .font(settings.transcriptFont)
+                            .foregroundStyle(settings.transcriptForeground)
                             .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
                             .textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(settings.highContrast ? 8 : 0)
+                            .background(settings.transcriptBackground,
+                                        in: RoundedRectangle(cornerRadius: 8))
                     }
 
                     Color.clear
@@ -86,7 +91,7 @@ struct LiveTranscriptView: View {
             }
             .onChange(of: viewModel.transcriptText) { _, _ in
                 if viewModel.isAutoScrollEnabled {
-                    withAnimation(.easeOut(duration: 0.3)) {
+                    withAnimation(settings.scrollAnimation) {
                         proxy.scrollTo(bottomAnchorID, anchor: .bottom)
                     }
                 }
@@ -152,7 +157,8 @@ struct LiveTranscriptView: View {
                 Capsule()
                     .fill(Color.blue.opacity(0.7))
                     .frame(width: 5, height: barHeight(for: index))
-                    .animation(.easeInOut(duration: 0.1), value: viewModel.currentAudioLevel)
+                    .animation(settings.reduceMotion ? nil : .easeInOut(duration: 0.1),
+                               value: viewModel.currentAudioLevel)
             }
         }
         .frame(height: 80)
@@ -227,7 +233,7 @@ struct LiveTranscriptView: View {
             .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
         }
         .padding(.bottom, 20)
-        .transition(.move(edge: .bottom).combined(with: .opacity))
+        .transition(settings.reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
         .accessibilityLabel("Scroll to latest transcript")
     }
 
@@ -241,4 +247,5 @@ struct LiveTranscriptView: View {
 
 #Preview {
     LiveTranscriptView(viewModel: LiveTranscriptViewModel())
+        .environment(AppSettings())
 }
